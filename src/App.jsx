@@ -61,40 +61,14 @@ const mockProfiles = [
       { id: 2, priority: 'Medium', task: 'Implement Certificate Pinning for Third-Party SDKs', detail: 'Expand pinning coverage to include critical third-party analytics and payment providers.' },
       { id: 3, priority: 'Low', task: 'Automated Posture Monitoring', detail: 'Integrate TLS-Scan into the CI/CD pipeline to catch regressions in network security config before release.' }
     ]
-  },
-  {
-    score: 38,
-    risk: 'High Risk',
-    summary: 'Critical defensive failures. Insecure cleartext traffic and weak TLS protocols detected.',
-    securityConfig: {
-      'Cleartext Allowed': 'Yes (Global)',
-      'Min TLS Support': '1.0 (Vulnerable)',
-      'Security Config': 'Default (Missing)',
-      'Certificate Pinning': 'Absent',
-      'HSTS Enforced': 'Not Detected'
-    },
-    findings: [
-      { id: 1, type: 'fail', icon: 'Wifi', title: 'Cleartext Traffic Enabled', badge: 'Critical', desc: 'The app allows insecure HTTP communication globally, exposing data to MITM attacks.', code: 'android:usesCleartextTraffic="true"', reco: 'Disable cleartext traffic globally in AndroidManifest.xml and enforce HTTPS.' },
-      { id: 2, type: 'fail', icon: 'Server', title: 'Weak TLS Protocol', badge: 'Critical', desc: 'Server allows connections via TLS 1.0/1.1 which are deprecated and insecure.', code: 'ssl_protocols TLSv1 TLSv1.1;', reco: 'Update backend to support exclusively TLS 1.2+ and implement HSTS.' },
-      { id: 3, type: 'fail', icon: 'AlertTriangle', title: 'Missing Network Config', badge: 'High', desc: 'No custom network security configuration found. App relies on system defaults.', code: '<!-- missing network_security_config.xml -->', reco: 'Implement a strict network security config file to define domain-specific rules.' }
-    ],
-    endpoints: [
-      { url: 'http://api.dev-test.net/debug', type: 'Dev', port: 80, status: 'Insecure', tls: 'None', group: 'test' },
-      { url: 'https://analytics.suspicious-domain.io', type: 'Anomalous', port: 443, status: 'Critical', tls: 'TLS 1.0', group: 'unknown' },
-      { url: 'http://legacy.internal-service.io', type: 'Internal', port: 80, status: 'Insecure', tls: 'None', group: 'test' }
-    ],
-    aiInsights: [
-      { id: 1, title: 'Anomalous Domain', desc: 'Detected "suspicious-domain.io" which does not follow standard production naming conventions. Potential data leakage.', icon: 'AlertTriangle' },
-      { id: 2, title: 'Test/Prod Split', desc: 'Traffic logs reveal sensitive data being sent to development/test endpoints over insecure channels.', icon: 'Cpu' }
-    ],
-    roadmap: [
-      { id: 1, priority: 'Critical', task: 'Immediate Shutdown of Cleartext Traffic', detail: 'Set usesCleartextTraffic="false" in AndroidManifest and migrate all http:// endpoints to https://.' },
-      { id: 2, priority: 'High', task: 'Enable HSTS globally', detail: 'Configure server-side HSTS headers to prevent protocol downgrade attacks across the entire domain.' },
-      { id: 3, priority: 'High', task: 'Decommission TLS 1.0/1.1', detail: 'Update server configuration to reject any connection below TLS 1.2 immediately.' },
-      { id: 4, priority: 'Medium', task: 'Implement Network Security Config', detail: 'Create and bundle a network_security_config.xml to explicitly whitelist secure domains and enforce pinning.' }
-    ]
   }
 ];
+
+// Helper to extract URLs from binary data
+const findEndpoints = (text) => {
+  const urlRegex = /https?:\/\/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}[^\s"'>]*/g;
+  return [...new Set(text.match(urlRegex) || [])];
+};
 
 export default function App() {
   const [appState, setAppState] = useState('upload');
@@ -104,42 +78,70 @@ export default function App() {
   const [scanLogs, setScanLogs] = useState([]);
   const [currentStep, setCurrentStep] = useState(-1);
   const [reportData, setReportData] = useState(null);
+  const [isFailed, setIsFailed] = useState(false);
   
   const terminalRef = useRef(null);
   const intervalRef = useRef(null);
 
   const steps = [
-    { title: 'APK Manifest Audit', desc: 'Checking Cleartext & Security Flags' },
-    { title: 'Network Config Analysis', desc: 'Verifying Pins & TLS Enforcements' },
-    { title: 'AI Endpoint Inventory', desc: 'Clustering Domains & Detecting Anomalies' }
+    { title: 'Uploading', desc: 'Sending APK to backend server' },
+    { title: 'Decompiling (JADX)', desc: 'Reversing bytecode to source code' },
+    { title: 'Static Analysis', desc: 'Extracting endpoints and configurations' }
   ];
 
-  const handleFile = (selectedFile) => {
+  const handleFile = async (selectedFile) => {
     if (!selectedFile) return;
-    if (intervalRef.current) clearInterval(intervalRef.current);
-
     setFile(selectedFile);
     setAppState('scanning');
-    setScanLogs([{ msg: `Scanning Target: ${selectedFile.name}`, type: 'cmd', time: new Date().toLocaleTimeString() }]);
-    setCurrentStep(0);
+    setIsFailed(false);
+    setScanLogs([{ msg: `Target: ${selectedFile.name}`, type: 'cmd', time: new Date().toLocaleTimeString() }]);
     
-    let stepCount = 0;
-    intervalRef.current = setInterval(() => {
-      stepCount++;
-      if (stepCount > steps.length) {
-        clearInterval(intervalRef.current);
-        const hash = (selectedFile.name.length + (selectedFile.size || 0)) % mockProfiles.length;
-        setReportData(mockProfiles[hash]);
-        setTimeout(() => setAppState('report'), 800);
-        return;
+    let logInterval = null;
+    try {
+      setCurrentStep(0);
+      setScanLogs(p => [...p, { msg: "Uploading APK to backend for decompilation...", type: 'cmd', time: new Date().toLocaleTimeString() }]);
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      // Start the JADX processing log simulation since backend might take a while
+      logInterval = setInterval(() => {
+         setScanLogs(p => [...p, { msg: "JADX: Processing dex files...", type: 'info', time: new Date().toLocaleTimeString() }]);
+      }, 5000);
+
+      setCurrentStep(1);
+      const response = await fetch('http://127.0.0.1:8000/api/scan', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (logInterval) {
+        clearInterval(logInterval);
+        logInterval = null;
       }
-      setCurrentStep(stepCount - 1);
-      setScanLogs(p => [...p, { 
-        msg: `[Step ${stepCount}] ${steps[stepCount-1].title}: Verified`, 
-        type: 'success',
-        time: new Date().toLocaleTimeString()
-      }]);
-    }, 1200);
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status} ${response.statusText}`);
+      }
+
+      setScanLogs(p => [...p, { msg: "Decompiling and Analyzing complete.", type: 'success', time: new Date().toLocaleTimeString() }]);
+      setCurrentStep(2);
+
+      const report = await response.json();
+
+      setScanLogs(p => [...p, { msg: "Static Analysis complete. Parsing results...", type: 'success', time: new Date().toLocaleTimeString() }]);
+
+      setReportData(report);
+      setTimeout(() => setAppState('report'), 1000);
+
+    } catch (error) {
+      if (logInterval) {
+        clearInterval(logInterval);
+      }
+      setIsFailed(true);
+      setScanLogs(p => [...p, { msg: `Error: ${error.message}`, type: 'fail', time: new Date().toLocaleTimeString() }]);
+      console.error(error);
+    }
   };
 
   useEffect(() => {
@@ -211,10 +213,10 @@ export default function App() {
         {appState === 'scanning' && (
           <div className="scanning-grid">
             <div className="scan-status-card glass-panel">
-              <h2>Defensive Audit in Progress...</h2>
+              <h2>{isFailed ? "Defensive Audit Failed" : "Defensive Audit in Progress..."}</h2>
               <div className="progress-list">
                 {steps.map((s, idx) => (
-                  <div key={idx} className={`step-item ${currentStep === idx ? 'active' : currentStep > idx ? 'done' : ''}`}>
+                  <div key={idx} className={`step-item ${currentStep === idx && !isFailed ? 'active' : currentStep > idx ? 'done' : ''}`}>
                     <div className="indicator"></div>
                     <div className="step-text">
                       <h4>{s.title}</h4>
@@ -223,6 +225,11 @@ export default function App() {
                   </div>
                 ))}
               </div>
+              {isFailed && (
+                <button className="nav-btn primary" style={{ marginTop: '2rem', width: '100%', display: 'flex', justifyContent: 'center', gap: '0.5rem' }} onClick={() => setAppState('upload')}>
+                  <RefreshCw size={16} /> Go Back / Try Again
+                </button>
+              )}
             </div>
             <div className="terminal-card glass-panel">
               <div className="terminal-body" ref={terminalRef}>
